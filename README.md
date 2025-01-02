@@ -7,15 +7,15 @@ Apple TV will delete retroarch's files, ROMs, saves, when it's low on disk space
 
 Features:
 
-Waits for RetroArch to be running on the AppleTV (i.e. the web server is avaialble)
-Backup - Just backs-up AppleTV RetroArch to the NAS (where the script runs).
-Two-way Sync - Syncronises files between AppleTV RetroArch and the NAS.  Intended to automatically copy ROMs, and in the future multi-AppleTV support will be added to sync game saves between AppleTVs
-Last-Modified sync - uses Last-Modified header from RetroArch webserver to determine if file has changed.  Sets the modified time on the backups to be same as AppleTV
-Uses .part files for partial downloads/uploads to avoid corruption.
-
-The script can be run manually, and there's also a run_retroarch-sync.sh which kills the existing process and restarts a new one seding output to retroarch-sync.log.  The intention for the cron is to run it once daily.  The script will wait until RetroArch is running, and because very long running scritps can be unrelialbbe, the pattern to restart it daily was adopted.
-
-This is very much alpha at time of release. Use at own risk.  I strongly recommend having a separate one-off backup before testing.
+Waits for RetroArch to be running on the AppleTV (i.e. the web server is avaialble).  
+Backup - Just backs-up AppleTV RetroArch to the NAS (where the script runs).  
+Two-way Sync - Syncronises files between AppleTV RetroArch and the NAS.  Intended to automatically copy ROMs, and in the future multi-AppleTV support will be added to sync game saves between AppleTVs.  
+Last-Modified sync - uses Last-Modified header from RetroArch webserver to determine if file has changed.  Sets the modified time on the backups to be same as AppleTV.  
+Uses .part files for partial downloads/uploads to avoid corruption.  
+  
+The script can be run manually, and there's also a run_retroarch-sync.sh which kills the existing process and restarts a new one seding output to retroarch-sync.log.  The intention for the cron is to run it once daily.  The script will wait until RetroArch is running, and because very long running scritps can be unrelialbbe, the pattern to restart it daily was adopted.  
+  
+This is very much alpha at time of release. Use at own risk.  I strongly recommend having a separate one-off backup before testing.  
 
 ## Configuration
 
