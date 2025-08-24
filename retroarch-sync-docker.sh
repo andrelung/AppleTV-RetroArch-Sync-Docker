@@ -12,31 +12,31 @@
 
 # We do NOT use `set -e` so partial errors don't kill the script immediately.
 # We'll rely on skipping logic for errors.
-set -u
+# set -u #this is problematic with setting variables in docker
 
 ###############################################################################
 # USER CONFIGURATION
 ###############################################################################
-HOST="192.168.1.41"
-PORT="80"
+#ATVHOST="192.168.1.41" #set by docker-env
+#ATVPORT="80"           #set by docker-env
 
-LOCAL_BASE_DIR="./LivingRoom"     # local parent directory
-REMOTE_BASE_PATH="/RetroArch"     # not used much in script, but you can reference
+#LOCAL_BASE_DIR="./LivingRoom"     # local parent directory set by docker
+#REMOTE_BASE_PATH="/RetroArch"     # not used in script, but you can reference
 
 # Folders with two-way sync
 TWOWAY_SYNC_PATHS=(
-  "/RetroArch/downloads"
-  "/RetroArch/saves"
+  "/downloads"
+  "/saves"
 )
 
 # Folders to "backup only" (AppleTV -> local)
 BACKUP_ONLY_PATHS=(
-  "/RetroArch/config"
+  "/config"
 )
 
 # Folders to EXCLUDE (ignored entirely)
 EXCLUDE_PATHS=(
-
+  "/downloads/cloud_backups"
 )
 
 MAX_RETRIES=3
@@ -44,12 +44,12 @@ CURL_CONNECT_TIMEOUT=5
 CURL_MAX_TIME=120
 
 # How frequently do we re-check two-way sync in the infinite loop
-SYNC_LOOP_INTERVAL=120  # seconds
+SYNC_LOOP_INTERVAL=600  # seconds 60*10 = 10 minutes
 
 ###############################################################################
 # INTERNAL GLOBALS
 ###############################################################################
-BASE_URL="http://${HOST}:${PORT}"
+BASE_URL="http://${ATVHOST}:${ATVPORT}"
 LIST_ENDPOINT="${BASE_URL}/list"
 DOWNLOAD_ENDPOINT="${BASE_URL}/download"
 UPLOAD_ENDPOINT="${BASE_URL}/upload"
@@ -61,23 +61,21 @@ LOCAL_BASE_DIR="${LOCAL_BASE_DIR%/}"  # remove trailing slash if any
 # FUNCTION: wait_for_port_open
 ###############################################################################
 function wait_for_port_open() {
-  echo ">> Checking if RetroArch's HTTP server is open on ${HOST}:${PORT}..."
-  until nc -z -w3 "${HOST}" "${PORT}"; do
+  echo ">> Checking if RetroArch's HTTP server is open on ${ATVHOST}:${ATVPORT}..."
+  until nc -z -w3 "${ATVHOST}" "${ATVPORT}"; do
     sleep 5
   done
-  echo ">> Port ${PORT} is open on ${HOST}!"
+  echo ">> Port ${ATVPORT} is open on ${ATVHOST}!"
 }
 
 ###############################################################################
 # FUNCTION: urlencode_path
 #   Replaces / -> %2F, space -> %20, etc.
 ###############################################################################
+
+# The old sed-approach did not encode [, ], (, ), !, etc., as well as slashes (to %2F), spaces, etc.
 function urlencode_path() {
-  local input="$1"
-  # For more complex cases, you'd use python/perl. For now, sed is enough
-  local output
-  output="$(echo -n "$input" | sed -e 's|/|%2F|g' -e 's| |%20|g')"
-  echo "$output"
+  jq -rn --arg s "$1" '$s|@uri'
 }
 
 ###############################################################################
@@ -88,6 +86,11 @@ function is_excluded_path() {
   if [[ "$p" == *.old ]]; then
     return 0  # skip old files
   fi
+
+  if [[ "$p" =~ (^|/)\@eaDir(/|$) ]]; then
+    return 0 # skip synology metadata folders
+  fi
+
   for ep in "${EXCLUDE_PATHS[@]}"; do
     if [[ "$p" == "$ep"* ]]; then
       return 0  # skip these
@@ -140,25 +143,22 @@ function list_remote_dir() {
     local result
     result="$(curl -sS --connect-timeout "$CURL_CONNECT_TIMEOUT" \
                     --max-time "$CURL_MAX_TIME" \
-                    "$url" 2>&1)"
+                    "$url")"
     local ec=$?
 
-    echo "$result"
+    # keep the debug information, but send it to stderr
+    #echo "[Debug] curl-result for remote '$remote_dir': $result" >&2
 
     if [[ $ec -eq 0 ]]; then
-      # Attempt to parse the result with jq
-      # First, let's show the raw JSON array for debug
 
+      # always deliver a JSON array – fall back to [] on any problem
       local filtered
-      filtered="$(echo "$result" \
-        | jq '[ .[] | select(.name|endswith(".old")|not) ]' 2>/dev/null )"
-
-      # If 'filtered' is empty or fails, fallback to an empty array
-      if [[ -z "$filtered" ]]; then
-        echo "[]"
-        return 0
-      fi
-
+      filtered="$(echo "$result" |
+                  jq -c 'if type=="array"
+                           then [ .[] | select(.name|endswith(".old")|not) ]
+                           else []
+                         end' 2>/dev/null)" || true
+      [[ -z $filtered ]] && filtered='[]'
       echo "$filtered"
       return 0
 
@@ -270,8 +270,11 @@ function do_remote_rename() {
 
   local old_esc
   old_esc="$(urlencode_path "$oldp")"
+  # echo "old_esc ${old_esc}"
   local new_esc
   new_esc="$(urlencode_path "$newp")"
+  # echo "new_esc ${new_esc}"
+  # echo -d \"oldPath=${old_esc}&newPath=${new_esc}\"
 
   local tries=0
   while (( tries < MAX_RETRIES )); do
@@ -341,7 +344,7 @@ function two_way_sync_dir() {
     path="$(echo "$path" | sed 's:/*$::')"  # remove trailing slash
 	name="$(echo "$item_json" | jq -r '.name')"
 	size="$(echo "$item_json" | jq -r '.size // -1')"
-    
+
 	if (( size < 0 )); then
       # Directory => recurse
       two_way_sync_dir "$path" "$local_dir/$name"
@@ -472,14 +475,14 @@ function download_file() {
       else
         # Move from .part to final
         mv -f "$tmp_file" "$local_path"
-		
+
 		# Get remote mtime and set it on the downloaded file
 		local remote_mtime
 		remote_mtime="$(get_remote_mtime "$remote_path")"
 		if [[ "$remote_mtime" -gt 0 ]]; then
 			touch -d "@$remote_mtime" "$local_path"
 		fi
-		
+
         return
       fi
     else
@@ -512,21 +515,23 @@ function upload_file() {
     return 1
   fi
 
-  local filename
-  filename="$(basename "$local_path")"
+  local filename="$(basename "$local_path")"
   local part_name="${filename}.part"
 
   echo ">> Uploading: $local_path => $remote_dir/$part_name"
 
   local tries=0
   while (( tries < MAX_RETRIES )); do
+
     if curl -sS --fail \
       --connect-timeout "$CURL_CONNECT_TIMEOUT" \
       --max-time "$CURL_MAX_TIME" \
       -X POST \
       -F "path=${remote_dir}/" \
-      -F "files[]=@${local_path};filename=${part_name}" \
+      -F "files[]=@\"${local_path}\";filename=\"${part_name}\"" \
       "${UPLOAD_ENDPOINT}"; then
+
+
 
       # Rename the uploaded .part file to its final name
       local old_path="${remote_dir}/${part_name}"
@@ -540,7 +545,7 @@ function upload_file() {
     fi
   done
 
-  echo "   Error: Could not upload $local_path => $remote_dir after $MAX_RETRIES attempts"
+  echo "   Error:   Upload finally failed for $local_path => $remote_dir after $MAX_RETRIES attempts"
   return 1
 }
 
@@ -606,7 +611,7 @@ function recursive_backup() {
   local listing
   listing="$(list_remote_dir "$remote_dir")"
 
-  mapfile -t items < <(echo "$listing" | jq -c '.[]')
+  mapfile -t items < <(jq -c '.[]' <<<"$listing" 2>/dev/null)
   for item_json in "${items[@]}"; do
     local path name size
     path="$(echo "$item_json" | jq -r '.path')"
@@ -640,6 +645,9 @@ function recursive_backup() {
 # MAIN
 ###############################################################################
 function main() {
+  echo
+  echo
+  echo "[$(TZ="$TZ" date)]"
   echo "==== RetroArch Sync (last-modified approach) ===="
   wait_for_port_open
 
